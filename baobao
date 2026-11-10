@@ -1,0 +1,254 @@
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+local Player = Players.LocalPlayer
+
+local Character = Player.Character or Player.CharacterAdded:Wait()
+local Humanoid = Character:WaitForChild("Humanoid")
+local Root = Character:WaitForChild("HumanoidRootPart")
+
+local Field = workspace.Game.Field
+local Tokens = workspace.Game.Tokens
+
+local Event = ReplicatedStorage.__Remotes.Events.Gather
+
+-- GUI
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "GatherMenu"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.Parent = Player:WaitForChild("PlayerGui")
+
+local Frame = Instance.new("Frame")
+Frame.Size = UDim2.new(0, 220, 0, 130)
+Frame.Position = UDim2.new(0.5, -110, 0.5, -65)
+Frame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+Frame.Active = true
+Frame.Draggable = true
+Frame.Parent = ScreenGui
+
+Instance.new("UICorner", Frame).CornerRadius = UDim.new(0, 10)
+
+-- Title
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, -45, 0, 30)
+Title.Position = UDim2.new(0, 10, 0, 5)
+Title.BackgroundTransparency = 1
+Title.Text = "baoboy macro 😂"
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.TextSize = 16
+Title.Font = Enum.Font.GothamBold
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.Parent = Frame
+
+local Close = Instance.new("TextButton")
+Close.Size = UDim2.new(0, 30, 0, 30)
+Close.Position = UDim2.new(1, -35, 0, 5)
+Close.Text = "X"
+Close.Parent = Frame
+
+local Toggle = Instance.new("TextButton")
+Toggle.Size = UDim2.new(0, 180, 0, 45)
+Toggle.Position = UDim2.new(0.5, -90, 0, 45)
+Toggle.Text = "START"
+Toggle.Parent = Frame
+
+local Status = Instance.new("TextLabel")
+Status.Size = UDim2.new(1, 0, 0, 25)
+Status.Position = UDim2.new(0, 0, 1, -30)
+Status.BackgroundTransparency = 1
+Status.Text = "Status: OFF"
+Status.TextColor3 = Color3.new(1, 1, 1)
+Status.Parent = Frame
+
+-- Variables
+local Active = false
+local Closed = false
+local CurrentTarget = nil
+local CurrentTargetType = nil
+local ArrivalDistance = 4
+
+-- Visited tokens
+local VisitedTokens = setmetatable({}, {__mode = "k"})
+
+-- Field traversal
+local FieldParts = {}
+local CurrentIndex = 1
+
+-- Character refresh
+local function UpdateCharacter()
+    Character = Player.Character or Player.CharacterAdded:Wait()
+    Humanoid = Character:WaitForChild("Humanoid")
+    Root = Character:WaitForChild("HumanoidRootPart")
+
+    CurrentTarget = nil
+    CurrentTargetType = nil
+end
+
+Player.CharacterAdded:Connect(UpdateCharacter)
+
+-- Status
+local function SetStatus(message)
+    Status.Text = "Status: " .. message
+end
+
+-- Refresh field
+local function RefreshField()
+    table.clear(FieldParts)
+
+    for _, part in ipairs(Field:GetDescendants()) do
+        if part:IsA("BasePart") then
+            table.insert(FieldParts, part)
+        end
+    end
+
+    CurrentIndex = 1
+end
+
+RefreshField()
+
+-- Nearest unvisited token
+local function GetNearestToken()
+    local nearest = nil
+    local shortestDistance = math.huge
+
+    for _, object in ipairs(Tokens:GetDescendants()) do
+        if object:IsA("BasePart") and not VisitedTokens[object] then
+            local distance = (Root.Position - object.Position).Magnitude
+
+            if distance < shortestDistance then
+                shortestDistance = distance
+                nearest = object
+            end
+        end
+    end
+
+    return nearest
+end
+
+-- Next field part
+local function GetNextFieldPart()
+    for _ = 1, #FieldParts do
+        if CurrentIndex > #FieldParts then
+            CurrentIndex = 1
+        end
+
+        local part = FieldParts[CurrentIndex]
+        CurrentIndex += 1
+
+        if part and part.Parent then
+            return part
+        end
+    end
+
+    RefreshField()
+
+    if #FieldParts > 0 then
+        return GetNextFieldPart()
+    end
+
+    return nil
+end
+
+-- Continuous movement
+local function CollectionLoop()
+    while Active and not Closed do
+        if not Character or not Character.Parent
+            or not Humanoid or Humanoid.Health <= 0
+            or not Root or not Root.Parent then
+
+            task.wait(0.2)
+            continue
+        end
+
+        -- Check arrival
+        if CurrentTarget then
+            if not CurrentTarget.Parent then
+                CurrentTarget = nil
+                CurrentTargetType = nil
+
+            elseif (Root.Position - CurrentTarget.Position).Magnitude <= ArrivalDistance then
+                if CurrentTargetType == "Token" then
+                    VisitedTokens[CurrentTarget] = true
+                end
+
+                CurrentTarget = nil
+                CurrentTargetType = nil
+            end
+        end
+
+        local token = GetNearestToken()
+
+        if token then
+            if CurrentTarget ~= token or CurrentTargetType ~= "Token" then
+                CurrentTarget = token
+                CurrentTargetType = "Token"
+                Humanoid:MoveTo(token.Position)
+            end
+
+            SetStatus("Collecting token")
+        else
+            if not CurrentTarget or CurrentTargetType ~= "Field" then
+                CurrentTarget = GetNextFieldPart()
+                CurrentTargetType = "Field"
+
+                if CurrentTarget then
+                    Humanoid:MoveTo(CurrentTarget.Position)
+                end
+            end
+
+            SetStatus("Exploring field")
+        end
+
+        RunService.Heartbeat:Wait()
+    end
+
+    if not Closed then
+        Toggle.Text = "START"
+        SetStatus("OFF")
+    end
+end
+
+-- Remote loop
+local function RemoteLoop()
+    while Active and not Closed do
+        Event:FireServer()
+        task.wait(0.1)
+    end
+end
+
+-- Start / Stop
+Toggle.MouseButton1Click:Connect(function()
+    Active = not Active
+
+    if Active then
+        Toggle.Text = "STOP"
+        SetStatus("ON")
+
+        CurrentTarget = nil
+        CurrentTargetType = nil
+
+        table.clear(VisitedTokens)
+        RefreshField()
+
+        task.spawn(CollectionLoop)
+        task.spawn(RemoteLoop)
+    else
+        Toggle.Text = "START"
+        SetStatus("OFF")
+
+        CurrentTarget = nil
+        CurrentTargetType = nil
+
+        if Humanoid and Root then
+            Humanoid:MoveTo(Root.Position)
+        end
+    end
+end)
+
+-- Close
+Close.MouseButton1Click:Connect(function()
+    Closed = true
+    Active = false
+    ScreenGui:Destroy()
+end)
